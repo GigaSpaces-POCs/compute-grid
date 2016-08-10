@@ -1,0 +1,7 @@
+org\openspaces\example\masterworker\model\Request.class
+org\openspaces\example\masterworker\model\WorkerProcess.class
+org\openspaces\example\masterworker\model\JobResult.class
+org\openspaces\example\masterworker\model\Result.class
+org\openspaces\example\masterworker\model\MasterProcess.class
+org\openspaces\example\masterworker\model\BaseProcess.class
+org\openspaces\example\masterworker\model\Base.class

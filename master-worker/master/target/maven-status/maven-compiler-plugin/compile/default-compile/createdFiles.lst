@@ -1,0 +1,3 @@
+org\openspaces\example\masterworker\nonblocking\MasterHeartbeat.class
+org\openspaces\example\masterworker\nonblocking\Master.class
+org\openspaces\example\masterworker\nonblocking\Master$1.class
