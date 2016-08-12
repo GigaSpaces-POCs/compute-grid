@@ -1,0 +1,139 @@
+package org.openspaces.example.masterworker.nonblocking;
+
+import java.lang.management.ManagementFactory;
+import java.lang.management.RuntimeMXBean;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.logging.Logger;
+
+import javax.annotation.PostConstruct;
+
+import org.openspaces.core.GigaSpace;
+import org.openspaces.example.masterworker.model.JobResult;
+import org.openspaces.example.masterworker.model.MasterProcess;
+import org.openspaces.example.masterworker.model.Request;
+import org.openspaces.example.masterworker.model.Result;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import com.gigaspaces.client.ChangeSet;
+import com.gigaspaces.client.WriteModifiers;
+import com.gigaspaces.query.IdQuery;
+
+@SuppressWarnings("restriction")
+@Component
+public class Master {
+    Logger logger = Logger.getLogger(this.getClass().getName());
+    @Autowired
+    protected GigaSpace gigaMySpace;
+    public static String hostName;
+    public static long processId;
+    public static String id;
+    public static Timestamp startTime = new Timestamp(System.currentTimeMillis());
+
+	@SuppressWarnings("rawtypes")
+	@PostConstruct
+	public void construct () {
+		try {
+			startTime = new Timestamp(System.currentTimeMillis());
+			
+			RuntimeMXBean runtimeBean = ManagementFactory.getRuntimeMXBean();
+			String jvmName = runtimeBean.getName();
+
+			hostName = InetAddress.getLocalHost().getHostName();
+			processId = Long.valueOf(jvmName.split("@")[0]);
+			id = processId + "@"+ hostName;
+			logger.info("From Master JVM PID  = " + processId + " for hostName=" + hostName + " and JVM Name = " + jvmName);
+			
+			MasterProcess masterProcess = new MasterProcess();
+			masterProcess.setHostName(hostName);
+			masterProcess.setProcessId(processId);
+			masterProcess.setId(id);
+			masterProcess.setStartDateTime(startTime);
+			gigaMySpace.write(masterProcess, 10000L, 500, WriteModifiers.UPDATE_OR_WRITE);
+			new MasterHeartbeat(gigaMySpace);
+			
+		} catch (UnknownHostException e) {
+			e.printStackTrace();
+		}
+		ExecutorService executor = Executors.newWorkStealingPool(5);
+		List<Future<String>> resultList = new ArrayList<Future<String>>();
+		for (int j=0; j<10; j++) {
+			for (int i=0;i<5;i++) {
+				final int jobId = i;
+				@SuppressWarnings("unchecked")
+				Future<String> result = executor.submit(new Callable() {
+					public String call() {
+						return submitJob(jobId , 5);
+					}
+				});
+				resultList.add(result);
+			}
+			
+			for (Future<String> future :  resultList) {
+				try {
+					logger.info(future.get() + " and task done is " +  future.isDone());
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				} catch (ExecutionException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+		executor.shutdown();
+	}
+	
+	public String submitJob(int jobId , int tasks)
+	{
+		logger.info(new Date(System.currentTimeMillis())+ " - Executing Job " +jobId);
+		Request requests [] = new Request [tasks]; 
+		for (int i=0;i<tasks; i++)
+		{
+			requests [i] = new  Request ();
+			requests [i].setJobID(jobId);
+			requests [i].setTaskID(jobId + "_"+i);
+			requests [i].setPriority((i%4) + 1);
+		}
+		JobResult jobResult = new JobResult();
+		jobResult.setJobId(jobId+"");
+		jobResult.setJobStatus(JobResult.CREATED);
+		jobResult.setJobCreateTime(new Timestamp(System.currentTimeMillis()));
+		
+		gigaMySpace.writeMultiple(requests);
+		gigaMySpace.write(jobResult);
+		
+        int previousResultCount = 0;
+        int newResultCount = 0;
+		Result resultTemplate = new Result();
+		resultTemplate.setJobID(jobId);
+		Result finalResultA[] = new Result [tasks]; 
+		while (newResultCount < tasks)
+		{
+			Result[] resultA = gigaMySpace.takeMultiple(resultTemplate,1000);
+			if (resultA!=null)
+			{
+				newResultCount += resultA.length;
+				for (int i=previousResultCount; i<newResultCount; i++) {
+					finalResultA[i] = resultA[i-previousResultCount];
+				}
+			}
+			/*System.out.println(new Date(System.currentTimeMillis())+ " - Done executing task=" + resultA.length
+					+ " with toalResults="+ newResultCount + " for Job " +jobId);*/
+            previousResultCount = newResultCount;
+		}
+		System.out.println(new Date(System.currentTimeMillis())+ " - Done executing Job " +jobId);
+		IdQuery<JobResult> idQuery = new IdQuery<JobResult>(JobResult.class, jobId+"");
+		gigaMySpace.change(idQuery, new ChangeSet().set("jobStatus", JobResult.ENDED)
+									.set("jobEndTime", new Timestamp(System.currentTimeMillis())));
+		return " - Done executing Job " +jobId;
+	}
+}
